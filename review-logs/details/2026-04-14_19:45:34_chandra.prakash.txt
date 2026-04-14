@@ -1,0 +1,85 @@
+Timestamp : 2026-04-14 19:45:34
+Developer : chandra.prakash <chandra.prakash@CludSmartzs-MacBook-Air.local>
+Branch    : main
+Commits   : ef5969f..52e86a8
+Files     : .githooks/pre-push review-logs/details/2026-04-14_19:37:38_chandra.prakash.txt review-logs/reviews.csv src/App.tsx src/pages/Dashboard.tsx src/pages/ReviewDashboard.tsx src/vite-env.d.ts 
+────────────────────────────────────────────────────
+
+## Code Review
+
+---
+
+### ❌ Critical
+
+1. **`src/pages/ReviewDashboard.tsx` — `import.meta.glob` with `eager: true`**
+   All `.txt` detail files are statically bundled. As review logs grow, the JS bundle bloats unboundedly with no upper bound. Switch to lazy loading:
+   ```ts
+   const detailFiles = import.meta.glob('../../review-logs/details/*.txt', { query: '?raw', import: 'default' });
+   // then: const content = await detailFiles[key]();
+   ```
+
+2. **`.githooks/pre-push` — `trap` overwritten inside loop**
+   `trap 'rm -f "$REVIEW_TEMP"' EXIT` is re-declared on every loop iteration, referencing only the latest `$REVIEW_TEMP`. On a multi-ref push, temp files from earlier iterations leak. Move the trap before the loop using an array, or delete `$REVIEW_TEMP` explicitly at the end of each iteration.
+
+3. **`.githooks/pre-push` — `git add -A` in the auto-fix path**
+   This stages *everything* — `.env`, build artifacts, secrets. Use targeted staging (`git add -- $(git diff --name-only)`) or at minimum warn the user what will be staged before committing.
+
+4. **`review-logs/` — PII committed to source control**
+   `reviews.csv` and detail files contain developer real names, emails, and machine hostnames (e.g. `CludSmartzs-MacBook-Air.local`). Add `review-logs/` to `.gitignore` and remove the already-committed files from history.
+
+5. **`.githooks/pre-push` — wrong Claude CLI invocation for auto-fix**
+   The review uses `claude -p "$PROMPT"` but the fix uses `claude --allowedTools "Edit" "$FIX_PROMPT"` (positional argument, no `-p` flag). This is inconsistent and likely broken. Should be `claude -p "$FIX_PROMPT" --allowedTools Edit`.
+
+---
+
+### ⚠️ Improvements
+
+6. **`src/pages/ReviewDashboard.tsx:314–319` — stats not memoized**
+   `total`, `pushed`, `aborted`, `failed`, `notInstalled`, `uniqueDevs` are recalculated on every render. Wrap them in a single `useMemo` block — they all derive from `entries`.
+
+7. **`src/pages/ReviewDashboard.tsx` — `expandedRow` not cleared on filter change**
+   Changing `search` or `statusFilter` can leave a previously expanded row's ID in state. If the row is filtered out then the filter is cleared, it reappears already expanded. Add `setExpandedRow(null)` to both `onChange` handlers.
+
+8. **`.githooks/pre-push` — colons in `DETAIL_NAME` filename**
+   `TIMESTAMP` ("2026-04-14 19:37:38") only has its space replaced. The colons remain, producing filenames like `2026-04-14_19:37:38_...txt`. This is visible in the committed file. Colons are invalid in filenames on Windows and problematic when the repo is cloned cross-platform. Replace colons too: `${TIMESTAMP//[: ]/_}`.
+
+9. **`src/pages/Dashboard.tsx:4–7` and `src/pages/ReviewDashboard.tsx:17–50` — file-local types**
+   `User` (Dashboard.tsx), `ReviewEntry`, `ParsedIssue`, `DevStat`, `ChipColor` (ReviewDashboard.tsx) are all isolated to their files. Move them to `src/types/index.ts` for reuse and discoverability.
+
+10. **`src/pages/ReviewDashboard.tsx` — `window.location.reload()` misleading**
+    Since CSV and detail files are bundled at build time via `?raw` and `import.meta.glob`, a page reload doesn't pick up new data. The "↻ Refresh" button gives false confidence. Either remove it or add a tooltip explaining data is build-time only.
+
+---
+
+### 💡 Suggestions
+
+11. **`src/pages/ReviewDashboard.tsx` — `devBadge` defined inside component**
+    It's recreated on every render. Move it outside `ReviewDashboard` as a pure function or `const` component alongside `StatusBadge`.
+
+12. **`src/pages/ReviewDashboard.tsx` — expand button always rendered**
+    The `▼` button renders for every row but does nothing when `detailFile` is absent. Replace with `—` or hide the button entirely when there's no detail file to avoid confusing UX.
+
+13. **`src/pages/ReviewDashboard.tsx` — `key={i}` in issue list**
+    `{items.map((issue, i) => (<li key={i}>...))}` uses array index as key. Since issues are parsed from static content this is low risk, but use a stable key like `${section}-${i}` or hash the text.
+
+14. **`src/pages/ReviewDashboard.tsx` — duplicate filter input Tailwind classes**
+    The `<input>` and `<select>` share nearly identical class strings. Extract a `filterInputClass` constant or a shared `<FilterControl>` component.
+
+15. **`src/pages/ReviewDashboard.tsx` — split the main component further**
+    The main JSX is still large. Extract `<StatsBar />`, `<DevComplianceTable />`, and `<ActivityLog />` as separate components to match the pattern already established by `StatCard`, `StatusBadge`, and `ReviewDetail`.
+
+---
+
+### ✅ Good
+
+- `mktemp || { echo ...; exit 1; }` — correct fail-fast pattern.
+- `f[6] ?? ''` — backward-compatible CSV schema migration for old rows.
+- `DETAIL_NAME` sanitizes `GIT_USER` with a character-class replacement — safe for filesystem paths (except for the timestamp colons noted above).
+- `mkdir -p "$REVIEW_DIR" "$DETAILS_DIR"` — both dirs created in one call.
+- `import React` removal in `App.tsx` and `Dashboard.tsx` — correct for the modern JSX transform.
+- `useMemo` applied consistently to `entries`, `devStats`, `allStatuses`, and `filtered`.
+- `parseCSVLine` handles quoted fields with embedded commas without an external library.
+
+---
+
+Can I fix all the above issues? Let me know.
