@@ -1,0 +1,72 @@
+Timestamp : 2026-04-14 19:37:38
+Developer : chandra.prakash <chandra.prakash@CludSmartzs-MacBook-Air.local>
+Branch    : main
+Commits   : ef5969f..38a5b5a
+Files     : .githooks/pre-push review-logs/reviews.csv src/App.tsx src/pages/Dashboard.tsx src/pages/ReviewDashboard.tsx src/vite-env.d.ts 
+────────────────────────────────────────────────────
+
+## Code Review
+
+---
+
+### ❌ Critical
+
+1. **`src/pages/ReviewDashboard.tsx` — `import.meta.glob` with `eager: true`**
+   All `.txt` detail files are bundled at build time. As review logs accumulate, the JS bundle grows unboundedly — this will silently bloat production builds. Use lazy/dynamic loading instead:
+   ```ts
+   const detailFiles = import.meta.glob('../../review-logs/details/*.txt', { query: '?raw', import: 'default' });
+   // then: const mod = await detailFiles[key]();
+   ```
+
+2. **`.githooks/pre-push` — `trap` overridden inside loop**
+   `trap 'rm -f "$REVIEW_TEMP"' EXIT` is set inside the `for ref_line` loop. Each iteration overwrites the trap, referencing only the latest `$REVIEW_TEMP`. Temp files from previous iterations are leaked if the script exits mid-loop (multi-ref push). Set the trap once before the loop with an array or move cleanup inside the loop body.
+
+---
+
+### ⚠️ Improvements
+
+3. **`src/pages/ReviewDashboard.tsx` — stats not memoized**
+   `total`, `pushed`, `aborted`, `failed`, `notInstalled`, `uniqueDevs` are recalculated on every render. Wrap in a single `useMemo` block — they all derive from `entries`.
+
+4. **`src/pages/ReviewDashboard.tsx` — 436-line component, split further**
+   Despite `StatusBadge`/`StatCard`/`ReviewDetail` being extracted, the main `ReviewDashboard` JSX still embeds three major sections inline. Extract: `<StatsBar />`, `<DevComplianceTable />`, `<ActivityLog />`.
+
+5. **Shared types missing — `src/pages/Dashboard.tsx` and `src/pages/ReviewDashboard.tsx`**
+   `User` (Dashboard), `ReviewEntry`, `ParsedIssue`, `DevStat`, `ChipColor` (ReviewDashboard) are all file-local. Move to `src/types/index.ts` for reuse and discoverability.
+
+6. **`review-logs/reviews.csv` committed with PII**
+   Developer names and emails (including machine hostnames) are committed. Add `review-logs/` to `.gitignore` and treat it as runtime output, not source.
+
+---
+
+### 💡 Suggestions
+
+7. **`src/pages/ReviewDashboard.tsx:329` — duplicate Tailwind classes**
+   The `<input>` and `<select>` share nearly identical class strings (`border border-gray-200 rounded-lg px-3 py-1.5 text-sm ... focus:ring-blue-200`). Extract a `filterInputClass` constant or a shared `<FilterControl>` component.
+
+8. **`src/pages/ReviewDashboard.tsx` — `devBadge` defined inside component**
+   `devBadge` is recreated on every render. Move it outside `ReviewDashboard` like `StatusBadge` is.
+
+9. **`src/pages/ReviewDashboard.tsx` — expand button visible but non-functional for no-detail rows**
+   The ▼ button renders for every row but does nothing when `detailFile` is absent. Replace with `—` or hide it to avoid confusing UX.
+
+10. **`src/pages/ReviewDashboard.tsx` — `expandedRow` not reset on filter change**
+    A filtered-out expanded row reappears expanded if the filter is cleared. Reset `expandedRow(null)` in the `setSearch`/`setStatusFilter` handlers.
+
+11. **`.githooks/pre-push` — `mktemp` no longer uses `.md` extension**
+    Claude's output is Markdown. Without the extension, manual inspection of the temp file loses context. Restore `mktemp /tmp/claude-review-XXXXXX.md` or use `.txt`.
+
+---
+
+### ✅ Good
+
+- `mktemp` now fails fast with a clear error message (`|| { echo ...; exit 1; }`).
+- CSV schema migration is backward-compatible — `f[6] ?? ''` gracefully handles old rows missing `detail_file`.
+- `parseCSVLine` correctly handles quoted fields with embedded commas without an external library.
+- `DETAIL_NAME` sanitizes `GIT_USER` with a character-class replacement — safe for filesystem paths.
+- `mkdir -p "$REVIEW_DIR" "$DETAILS_DIR"` creates both directories atomically in one call.
+- `import React` removal in `App.tsx` and `Dashboard.tsx` is correct for the JSX transform.
+
+---
+
+Can I fix all the above issues? Let me know.

@@ -212,16 +212,44 @@ $DIFF"
   format_review "$REVIEW_OUTPUT"
   echo ""
 
-  # ── Ask user to confirm or abort the push ────────────────────────────────────
+  # ── Ask user to confirm, abort, or auto-fix ──────────────────────────────────
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  y = push as-is"
-  echo "  n = abort push (fix issues locally, then push again)"
+  echo "  n = abort push"
+  echo "  f = auto-fix all issues with Claude, commit fixes, then push again"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   exec < /dev/tty
-  read -r -p "  Choice (y/n): " PROCEED
+  read -r -p "  Choice (y/n/f): " PROCEED
   echo ""
 
-  if [[ "$PROCEED" == "y" || "$PROCEED" == "Y" ]]; then
+  if [[ "$PROCEED" == "f" || "$PROCEED" == "F" ]]; then
+    echo "  🔧 Launching Claude to fix all issues..."
+    echo ""
+
+    FIX_PROMPT="The following code review issues were found. Fix ALL of them directly in the project files:
+
+$REVIEW_OUTPUT"
+
+    claude --allowedTools "Edit" "$FIX_PROMPT"
+    FIX_EXIT=$?
+
+    if [ $FIX_EXIT -ne 0 ]; then
+      echo ""
+      echo "  ⚠️  Claude fix failed (exit $FIX_EXIT). Please fix manually."
+      echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"FIX_FAILED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
+      exit 1
+    fi
+
+    echo ""
+    echo "  Committing fixes..."
+    git add -A
+    git commit -m "fix: apply Claude AI review suggestions"
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"AUTO_FIXED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
+    echo ""
+    echo "  ✅ Fixes committed. Run 'git push' again to push with the fixes."
+    exit 1
+
+  elif [[ "$PROCEED" == "y" || "$PROCEED" == "Y" ]]; then
     echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSHED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
   else
     echo "  Push aborted by $GIT_USER."
