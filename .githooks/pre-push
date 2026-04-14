@@ -61,6 +61,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 PROMPT_FILE="$REPO_ROOT/.githooks/review-prompt.md"
 LOG_FILE="$REPO_ROOT/review-logs/reviews.csv"
 REVIEW_DIR="$REPO_ROOT/review-logs"
+DETAILS_DIR="$REPO_ROOT/review-logs/details"
 
 GIT_USER=$(git config user.name 2>/dev/null)
 GIT_EMAIL=$(git config user.email 2>/dev/null)
@@ -81,11 +82,11 @@ if [ -z "$GIT_EMAIL" ]; then
   echo ""
 fi
 
-mkdir -p "$REVIEW_DIR"
+mkdir -p "$REVIEW_DIR" "$DETAILS_DIR"
 
 # Write CSV header if log file does not exist yet
 if [ ! -f "$LOG_FILE" ]; then
-  echo "timestamp,username,email,branch,files,status" > "$LOG_FILE"
+  echo "timestamp,username,email,branch,files,status,detail_file" > "$LOG_FILE"
 fi
 
 # ── Check dependencies ────────────────────────────────────────────────────────
@@ -94,7 +95,7 @@ if ! command -v claude &>/dev/null; then
   echo "⚠️  'claude' CLI not found. Install Claude Code to enable AI reviews."
   echo "   Push will proceed without review."
   echo ""
-  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"\",\"CLAUDE_NOT_INSTALLED\"" >> "$LOG_FILE"
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"\",\"CLAUDE_NOT_INSTALLED\",\"\"" >> "$LOG_FILE"
   exit 0
 fi
 
@@ -167,7 +168,7 @@ $DIFF"
       kill "$CLAUDE_PID" 2>/dev/null
       printf "\r\033[K"
       echo "⚠️  Review timed out after ${TIMEOUT}s. Push will proceed."
-      echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_TIMEOUT\"" >> "$LOG_FILE"
+      echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_TIMEOUT\",\"\"" >> "$LOG_FILE"
       exit 0
     fi
   done
@@ -182,15 +183,29 @@ $DIFF"
     echo "⚠️  Claude review failed (exit $CLAUDE_EXIT). Output:"
     echo "$REVIEW_OUTPUT"
     echo ""
-    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\",\"\"" >> "$LOG_FILE"
     exit 1
   fi
 
   if [ -z "$REVIEW_OUTPUT" ]; then
     echo "⚠️  Claude returned empty output. Aborting push."
-    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\",\"\"" >> "$LOG_FILE"
     exit 1
   fi
+
+  # ── Save review detail file ───────────────────────────────────────────────────
+  DETAIL_NAME="${TIMESTAMP// /_}_${GIT_USER//[^a-zA-Z0-9._-]/_}.txt"
+  DETAIL_PATH="$DETAILS_DIR/$DETAIL_NAME"
+  {
+    echo "Timestamp : $TIMESTAMP"
+    echo "Developer : $GIT_USER <$GIT_EMAIL>"
+    echo "Branch    : $BRANCH"
+    echo "Commits   : $COMMIT_RANGE"
+    echo "Files     : $CHANGED_FILES"
+    echo "────────────────────────────────────────────────────"
+    echo ""
+    echo "$REVIEW_OUTPUT"
+  } > "$DETAIL_PATH"
 
   echo -e "  ${GREEN}✅ Review complete${NC}"
   echo ""
@@ -207,10 +222,10 @@ $DIFF"
   echo ""
 
   if [[ "$PROCEED" == "y" || "$PROCEED" == "Y" ]]; then
-    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSHED\"" >> "$LOG_FILE"
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSHED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
   else
     echo "  Push aborted by $GIT_USER."
-    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSH_ABORTED\"" >> "$LOG_FILE"
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSH_ABORTED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
     exit 1
   fi
 done
