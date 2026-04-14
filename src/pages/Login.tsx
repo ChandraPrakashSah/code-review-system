@@ -14,7 +14,7 @@ const Login = () => {
     if (user) {
       navigate('/dashboard');
     } else {
-      alert('Invalid credentials');
+      console.error('Invalid credentials');
     }
   };
 
