@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button, Input, Card } from '@heroui/react';
 import { useNavigate } from 'react-router-dom';
-
+import FingerprintJS from '@fingerprintjs/fingerprintjs';
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,6 +17,21 @@ const Login = () => {
       alert('Invalid credentials');
     }
   };
+
+  // Function to get the device fingerprint
+  const getDeviceId = async () => {
+    const fp = await FingerprintJS.load();
+    const result = await fp.get();
+    return result.visitorId; // stable unique ID
+  };
+
+  useEffect(()=>{
+    const fetchDeviceId = async () => {
+      const deviceId = await getDeviceId();
+      console.log('Device ID:', deviceId);
+    };
+    fetchDeviceId();
+  }, [])
 
   return (
     <div className="fixed inset-0 flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100">

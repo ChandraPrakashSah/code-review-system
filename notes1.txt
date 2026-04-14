@@ -1,0 +1,4 @@
+Generate a clean and modern UI based on the attached screenshot.
+Match the layout, spacing, and structure closely, 
+ensure responsiveness, and use best practices.
+Provide complete React component code with styling(CSS / SCSS or Tailwind).

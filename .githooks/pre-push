@@ -1,0 +1,124 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude AI Code Review — Pre-push Hook
+# Runs automatically before every git push.
+# Logs usage to review-logs/reviews.csv so the team lead can track compliance.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Load user shell profile so PATH includes claude, nvm, brew, etc.
+# This is needed because git hooks run in a non-interactive shell.
+[ -f "$HOME/.zshrc" ]   && source "$HOME/.zshrc"   2>/dev/null
+[ -f "$HOME/.bashrc" ]  && source "$HOME/.bashrc"  2>/dev/null
+[ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null
+
+# Also add common install locations for claude CLI
+export PATH="$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+PROMPT_FILE="$REPO_ROOT/.githooks/review-prompt.md"
+LOG_FILE="$REPO_ROOT/review-logs/reviews.csv"
+REVIEW_DIR="$REPO_ROOT/review-logs"
+
+GIT_USER=$(git config user.name 2>/dev/null || echo "unknown")
+GIT_EMAIL=$(git config user.email 2>/dev/null || echo "unknown")
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+mkdir -p "$REVIEW_DIR"
+
+# Write CSV header if log file does not exist yet
+if [ ! -f "$LOG_FILE" ]; then
+  echo "timestamp,username,email,commit_range,branch,status" > "$LOG_FILE"
+fi
+
+# ── Check dependencies ────────────────────────────────────────────────────────
+if ! command -v claude &>/dev/null; then
+  echo ""
+  echo "⚠️  'claude' CLI not found. Install Claude Code to enable AI reviews."
+  echo "   Push will proceed without review."
+  echo ""
+  BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"N/A\",\"$BRANCH\",\"CLAUDE_NOT_INSTALLED\"" >> "$LOG_FILE"
+  exit 0
+fi
+
+if [ ! -f "$PROMPT_FILE" ]; then
+  echo "⚠️  Review prompt not found at $PROMPT_FILE. Skipping review."
+  exit 0
+fi
+
+# ── Read push refs from stdin ─────────────────────────────────────────────────
+# stdin format: <local_ref> <local_sha> <remote_ref> <remote_sha>
+PUSH_REFS=()
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  PUSH_REFS+=("$local_ref $local_sha $remote_ref $remote_sha")
+done
+
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+
+for ref_line in "${PUSH_REFS[@]}"; do
+  read -r local_ref local_sha remote_ref remote_sha <<< "$ref_line"
+
+  # Skip branch deletions
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Determine diff range
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch — review the top commit only
+    COMMIT_RANGE="$local_sha"
+    DIFF=$(git show "$local_sha" 2>/dev/null)
+  else
+    COMMIT_RANGE="${remote_sha:0:7}..${local_sha:0:7}"
+    DIFF=$(git diff "$remote_sha" "$local_sha" 2>/dev/null)
+  fi
+
+  if [ -z "$DIFF" ]; then
+    echo "ℹ️  No diff found for $COMMIT_RANGE. Skipping review."
+    continue
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  🤖  Claude AI Code Review"
+  echo "  Developer : $GIT_USER <$GIT_EMAIL>"
+  echo "  Branch    : $BRANCH"
+  echo "  Commits   : $COMMIT_RANGE"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  # Build full prompt = template + diff
+  PROMPT="$(cat "$PROMPT_FILE")
+
+$DIFF"
+
+  # Run Claude review (non-interactive print mode)
+  REVIEW_OUTPUT=$(claude -p "$PROMPT" 2>&1)
+  CLAUDE_EXIT=$?
+
+  if [ $CLAUDE_EXIT -ne 0 ]; then
+    echo "⚠️  Claude review failed (exit $CLAUDE_EXIT). Output:"
+    echo "$REVIEW_OUTPUT"
+    echo ""
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$COMMIT_RANGE\",\"$BRANCH\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+    # Don't block push if claude itself errors
+  else
+    echo "$REVIEW_OUTPUT"
+    echo ""
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$COMMIT_RANGE\",\"$BRANCH\",\"REVIEWED\"" >> "$LOG_FILE"
+  fi
+
+  # ── Ask user to confirm or abort ──────────────────────────────────────────
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exec < /dev/tty
+  read -r -p "  Proceed with push? (y/n): " PROCEED
+  echo ""
+
+  if [[ "$PROCEED" != "y" && "$PROCEED" != "Y" ]]; then
+    echo "  Push aborted by $GIT_USER."
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$COMMIT_RANGE\",\"$BRANCH\",\"PUSH_ABORTED\"" >> "$LOG_FILE"
+    exit 1
+  fi
+done
+
+exit 0

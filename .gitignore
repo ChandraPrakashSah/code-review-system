@@ -7,6 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Keep Claude AI review logs (CSV — not a .log file, but be explicit)
+!review-logs/
+!review-logs/**
+
 node_modules
 dist
 dist-ssr
