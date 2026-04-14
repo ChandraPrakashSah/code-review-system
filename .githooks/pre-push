@@ -1,0 +1,218 @@
+#!/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# Claude AI Code Review — Pre-push Hook
+# Runs automatically before every git push.
+# Logs usage to review-logs/reviews.csv so the team lead can track compliance.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Load user shell profile so PATH includes claude, nvm, brew, etc.
+[ -f "$HOME/.zshrc" ]   && source "$HOME/.zshrc"   2>/dev/null
+[ -f "$HOME/.bashrc" ]  && source "$HOME/.bashrc"  2>/dev/null
+[ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null
+export PATH="$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+# ── Terminal colors ───────────────────────────────────────────────────────────
+RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
+GREEN='\033[0;32m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+
+# Convert markdown review output to colored terminal output
+format_review() {
+  local input="$1"
+  local in_code_block=0
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\`\`\` ]]; then
+      if [ $in_code_block -eq 0 ]; then
+        in_code_block=1
+        echo -e "${DIM}  ┌─ code ──────────────────────────────${NC}"
+      else
+        in_code_block=0
+        echo -e "${DIM}  └────────────────────────────────────${NC}"
+      fi
+      continue
+    fi
+    if [ $in_code_block -eq 1 ]; then
+      echo -e "${DIM}  │ ${line}${NC}"; continue
+    fi
+
+    line=$(echo "$line" | sed 's/\*\*\([^*]*\)\*\*/\1/g; s/`\([^`]*\)`/\1/g')
+
+    if [[ "$line" =~ ^❌ ]]; then
+      echo ""; echo -e "${RED}${BOLD}  $line${NC}"; echo -e "${RED}  ────────────────────────────────────${NC}"
+    elif [[ "$line" =~ ^⚠️ ]]; then
+      echo ""; echo -e "${YELLOW}${BOLD}  $line${NC}"; echo -e "${YELLOW}  ────────────────────────────────────${NC}"
+    elif [[ "$line" =~ ^💡 ]]; then
+      echo ""; echo -e "${CYAN}${BOLD}  $line${NC}"; echo -e "${CYAN}  ────────────────────────────────────${NC}"
+    elif [[ "$line" =~ ^✅ ]]; then
+      echo ""; echo -e "${GREEN}${BOLD}  $line${NC}"; echo -e "${GREEN}  ────────────────────────────────────${NC}"
+    elif [[ "$line" =~ ^[0-9]+\. ]]; then
+      echo -e "${BOLD}  $line${NC}"
+    elif [[ "$line" =~ ^"-" ]]; then
+      echo -e "  $line"
+    elif [ -z "$line" ]; then
+      echo ""
+    else
+      echo "  $line"
+    fi
+  done <<< "$input"
+}
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+PROMPT_FILE="$REPO_ROOT/.githooks/review-prompt.md"
+LOG_FILE="$REPO_ROOT/review-logs/reviews.csv"
+REVIEW_DIR="$REPO_ROOT/review-logs"
+
+GIT_USER=$(git config user.name 2>/dev/null)
+GIT_EMAIL=$(git config user.email 2>/dev/null)
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Warn if git identity is not configured and fall back to system username
+if [ -z "$GIT_USER" ]; then
+  GIT_USER=$(whoami)
+  echo ""
+  echo "⚠️  git user.name is not set. Logging system user '$GIT_USER' instead."
+  echo "   Fix: git config --global user.name \"Your Name\""
+fi
+if [ -z "$GIT_EMAIL" ]; then
+  GIT_EMAIL="${GIT_USER}@$(hostname)"
+  echo "⚠️  git user.email is not set. Logging '$GIT_EMAIL' instead."
+  echo "   Fix: git config --global user.email \"your@email.com\""
+  echo ""
+fi
+
+mkdir -p "$REVIEW_DIR"
+
+# Write CSV header if log file does not exist yet
+if [ ! -f "$LOG_FILE" ]; then
+  echo "timestamp,username,email,branch,files,status" > "$LOG_FILE"
+fi
+
+# ── Check dependencies ────────────────────────────────────────────────────────
+if ! command -v claude &>/dev/null; then
+  echo ""
+  echo "⚠️  'claude' CLI not found. Install Claude Code to enable AI reviews."
+  echo "   Push will proceed without review."
+  echo ""
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"\",\"CLAUDE_NOT_INSTALLED\"" >> "$LOG_FILE"
+  exit 0
+fi
+
+if [ ! -f "$PROMPT_FILE" ]; then
+  echo "⚠️  Review prompt not found at $PROMPT_FILE. Skipping review."
+  exit 0
+fi
+
+# ── Read push refs from stdin ─────────────────────────────────────────────────
+PUSH_REFS=()
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  PUSH_REFS+=("$local_ref $local_sha $remote_ref $remote_sha")
+done
+
+for ref_line in "${PUSH_REFS[@]}"; do
+  read -r local_ref local_sha remote_ref remote_sha <<< "$ref_line"
+
+  # Skip branch deletions
+  if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+    continue
+  fi
+
+  # Determine diff
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    COMMIT_RANGE="${local_sha:0:7}"
+    DIFF=$(git show "$local_sha" 2>/dev/null)
+  else
+    COMMIT_RANGE="${remote_sha:0:7}..${local_sha:0:7}"
+    DIFF=$(git diff "$remote_sha" "$local_sha" 2>/dev/null)
+  fi
+
+  if [ -z "$DIFF" ]; then
+    echo "ℹ️  No diff found for $COMMIT_RANGE. Skipping review."
+    continue
+  fi
+
+  CHANGED_FILES=$(git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null | tr '\n' ' ')
+  [ -z "$CHANGED_FILES" ] && CHANGED_FILES=$(git show --name-only --format="" "$local_sha" 2>/dev/null | tr '\n' ' ')
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  🤖  Claude AI Code Review"
+  echo "  Developer : $GIT_USER <$GIT_EMAIL>"
+  echo "  Branch    : $BRANCH"
+  echo "  Commits   : $COMMIT_RANGE"
+  echo "  Files     : $CHANGED_FILES"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  PROMPT="$(cat "$PROMPT_FILE")
+
+$DIFF"
+
+  # ── Run Claude in background with live spinner ──────────────────────────────
+  REVIEW_TEMP=$(mktemp /tmp/claude-review-XXXXXX.md)
+  trap 'rm -f "$REVIEW_TEMP"' EXIT
+
+  claude -p "$PROMPT" > "$REVIEW_TEMP" 2>&1 &
+  CLAUDE_PID=$!
+
+  SPINNER="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+  ELAPSED=0
+  TIMEOUT=120
+  while kill -0 "$CLAUDE_PID" 2>/dev/null; do
+    CHAR="${SPINNER:$((ELAPSED % ${#SPINNER})):1}"
+    printf "\r  %s  Reviewing your code, please wait..." "$CHAR"
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
+    if [ $ELAPSED -ge $TIMEOUT ]; then
+      kill "$CLAUDE_PID" 2>/dev/null
+      printf "\r\033[K"
+      echo "⚠️  Review timed out after ${TIMEOUT}s. Push will proceed."
+      echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_TIMEOUT\"" >> "$LOG_FILE"
+      exit 0
+    fi
+  done
+
+  wait "$CLAUDE_PID"
+  CLAUDE_EXIT=$?
+  printf "\r\033[K"
+
+  REVIEW_OUTPUT=$(cat "$REVIEW_TEMP")
+
+  if [ $CLAUDE_EXIT -ne 0 ]; then
+    echo "⚠️  Claude review failed (exit $CLAUDE_EXIT). Output:"
+    echo "$REVIEW_OUTPUT"
+    echo ""
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+    exit 1
+  fi
+
+  if [ -z "$REVIEW_OUTPUT" ]; then
+    echo "⚠️  Claude returned empty output. Aborting push."
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+    exit 1
+  fi
+
+  echo -e "  ${GREEN}✅ Review complete${NC}"
+  echo ""
+  format_review "$REVIEW_OUTPUT"
+  echo ""
+
+  # ── Ask user to confirm or abort the push ────────────────────────────────────
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  y = push as-is"
+  echo "  n = abort push (fix issues locally, then push again)"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  exec < /dev/tty
+  read -r -p "  Choice (y/n): " PROCEED
+  echo ""
+
+  if [[ "$PROCEED" == "y" || "$PROCEED" == "Y" ]]; then
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSHED\"" >> "$LOG_FILE"
+  else
+    echo "  Push aborted by $GIT_USER."
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"PUSH_ABORTED\"" >> "$LOG_FILE"
+    exit 1
+  fi
+done
+
+exit 0

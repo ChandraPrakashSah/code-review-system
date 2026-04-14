@@ -15,6 +15,7 @@ const Login = () => {
       navigate('/dashboard');
     } else {
       console.error('Invalid credentials');
+      console.log('Login failed for email:', email);
     }
   };
 
