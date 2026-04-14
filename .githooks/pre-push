@@ -149,7 +149,7 @@ for ref_line in "${PUSH_REFS[@]}"; do
 $DIFF"
 
   # ── Run Claude in background with live spinner ──────────────────────────────
-  REVIEW_TEMP=$(mktemp /tmp/claude-review-XXXXXX.md)
+  REVIEW_TEMP=$(mktemp /tmp/claude-review-XXXXXX) || { echo "❌ Failed to create temp file. Aborting."; exit 1; }
   trap 'rm -f "$REVIEW_TEMP"' EXIT
 
   claude -p "$PROMPT" > "$REVIEW_TEMP" 2>&1 &
