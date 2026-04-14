@@ -1,3 +1,1 @@
-timestamp,username,email,commit_range,branch,status
-"2026-04-14 17:45:46","unknown","unknown","N/A","main","CLAUDE_NOT_INSTALLED"
-"2026-04-14 18:00:35","unknown","unknown","main","","CLAUDE_NOT_INSTALLED"
+"2026-04-14 18:19:12","chandra.prakash","chandra.prakash@CludSmartzs-MacBook-Air.local","main",".githooks/pre-commit review-logs/reviews.csv ","REVIEW_FAILED"

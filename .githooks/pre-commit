@@ -11,15 +11,41 @@
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null
 export PATH="$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
+# macOS-compatible timeout: use GNU timeout if available, else perl fallback
+_timeout() {
+  local secs=$1; shift
+  if command -v gtimeout &>/dev/null; then
+    gtimeout "$secs" "$@"
+  elif command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+  else
+    perl -e "alarm $secs; exec @ARGV" -- "$@"
+  fi
+}
+
 REPO_ROOT=$(git rev-parse --show-toplevel)
 PROMPT_FILE="$REPO_ROOT/.githooks/review-prompt.md"
 LOG_FILE="$REPO_ROOT/review-logs/reviews.csv"
 REVIEW_DIR="$REPO_ROOT/review-logs"
 
-GIT_USER=$(git config user.name 2>/dev/null || echo "unknown")
-GIT_EMAIL=$(git config user.email 2>/dev/null || echo "unknown")
+GIT_USER=$(git config user.name 2>/dev/null)
+GIT_EMAIL=$(git config user.email 2>/dev/null)
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Warn if git identity is not configured and fall back to system username
+if [ -z "$GIT_USER" ]; then
+  GIT_USER=$(whoami)
+  echo ""
+  echo "⚠️  git user.name is not set. Logging system user '$GIT_USER' instead."
+  echo "   Fix: git config --global user.name \"Your Name\""
+fi
+if [ -z "$GIT_EMAIL" ]; then
+  GIT_EMAIL="${GIT_USER}@$(hostname)"
+  echo "⚠️  git user.email is not set. Logging '$GIT_EMAIL' instead."
+  echo "   Fix: git config --global user.email \"your@email.com\""
+  echo ""
+fi
 
 mkdir -p "$REVIEW_DIR"
 
@@ -68,8 +94,8 @@ PROMPT="$(cat "$PROMPT_FILE")
 
 $DIFF"
 
-# Run Claude review (non-interactive print mode)
-REVIEW_OUTPUT=$(claude -p "$PROMPT" 2>&1)
+# Run Claude review (non-interactive print mode), with a 120-second timeout
+REVIEW_OUTPUT=$(_timeout 120 claude -p "$PROMPT" 2>&1)
 CLAUDE_EXIT=$?
 
 if [ $CLAUDE_EXIT -ne 0 ]; then
@@ -77,22 +103,90 @@ if [ $CLAUDE_EXIT -ne 0 ]; then
   echo "$REVIEW_OUTPUT"
   echo ""
   echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
-else
-  echo "$REVIEW_OUTPUT"
-  echo ""
-  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"REVIEWED\"" >> "$LOG_FILE"
-fi
-
-# ── Ask user to confirm or abort the commit ───────────────────────────────────
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-exec < /dev/tty
-read -r -p "  Proceed with commit? (y/n): " PROCEED
-echo ""
-
-if [[ "$PROCEED" != "y" && "$PROCEED" != "Y" ]]; then
-  echo "  Commit aborted by $GIT_USER."
-  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"COMMIT_ABORTED\"" >> "$LOG_FILE"
   exit 1
 fi
 
-exit 0
+if [ -z "$REVIEW_OUTPUT" ]; then
+  echo "⚠️  Claude returned empty review output. Aborting to avoid blind auto-fix."
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"REVIEW_FAILED\"" >> "$LOG_FILE"
+  exit 1
+fi
+
+echo "$REVIEW_OUTPUT"
+echo ""
+
+# ── Ask user to confirm, abort, or auto-fix ──────────────────────────────────
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  y = commit as-is"
+echo "  n = abort commit"
+echo "  f = auto-fix all issues with Claude, then re-commit"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+exec < /dev/tty
+read -r -p "  Choice (y/n/f): " PROCEED
+echo ""
+
+if [[ "$PROCEED" == "f" || "$PROCEED" == "F" ]]; then
+  echo "  🔧 Launching Claude to fix all issues..."
+  echo "  ⚠️  Claude will be granted Edit-only file access to apply fixes."
+  echo ""
+
+  # Capture which files were staged before Claude edits them
+  mapfile -t STAGED_FILES_ARRAY < <(git diff --cached --name-only)
+
+  # Write review output to a temp file to avoid shell-level interpolation issues
+  # and limit the attack surface of prompt injection via file contents
+  REVIEW_TEMP=$(mktemp /tmp/claude-review-XXXXXX.md)
+  trap 'rm -f "$REVIEW_TEMP"' EXIT
+  printf '%s' "$REVIEW_OUTPUT" > "$REVIEW_TEMP"
+
+  FIX_PROMPT="The following code review issues were found in staged changes. Fix ALL of them directly in the project files. Edit the files to resolve every issue listed:
+
+$(cat "$REVIEW_TEMP")"
+
+  # Run Claude in agentic mode with Edit-only permissions and a 120-second timeout.
+  # --allowedTools "Edit" prevents Claude from running shell commands or accessing
+  # the network, even if the review output contains injected instructions.
+  _timeout 120 claude --allowedTools "Edit" "$FIX_PROMPT"
+  FIX_EXIT=$?
+
+  if [ $FIX_EXIT -ne 0 ]; then
+    echo ""
+    echo "  ⚠️  Claude fix invocation failed (exit $FIX_EXIT). Staged files were NOT re-staged."
+    echo "  Please fix the issues manually."
+    echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"FIX_FAILED\"" >> "$LOG_FILE"
+    exit 1
+  fi
+
+  echo ""
+  echo "  Re-staging fixed files..."
+  for f in "${STAGED_FILES_ARRAY[@]}"; do
+    if [ -f "$f" ]; then
+      git add "$f"
+    else
+      # File was deleted by Claude — remove it from the index
+      git rm --cached "$f" 2>/dev/null || true
+    fi
+  done
+
+  echo ""
+  echo "  Changes made by Claude:"
+  git diff --cached --stat
+
+  STAGED_FILES=$(git diff --cached --name-only | tr '\n' ' ')
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"AUTO_FIXED\"" >> "$LOG_FILE"
+  echo ""
+  echo "  ✅ Fixes applied and staged. Review the diff above before re-committing."
+  echo "  Run 'git commit' again to commit the fixed code."
+  exit 1
+
+elif [[ "$PROCEED" == "y" || "$PROCEED" == "Y" ]]; then
+  # Log once, after the user's confirmed decision, to avoid duplicate entries
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"COMMITTED\"" >> "$LOG_FILE"
+  exit 0
+
+else
+  echo "  Commit aborted by $GIT_USER."
+  # Log once, after the user's confirmed decision, to avoid duplicate entries
+  echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$STAGED_FILES\",\"COMMIT_ABORTED\"" >> "$LOG_FILE"
+  exit 1
+fi
