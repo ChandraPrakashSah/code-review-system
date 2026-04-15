@@ -1,24 +1,27 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import FormField from '../components/FormField';
-
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
+import { hashPassword } from '../utils/crypto';
+import type { StoredUser } from '../types';
 
 const Signup = () => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
   const handleSignup = async (e: FormEvent) => {
     e.preventDefault();
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    const users: StoredUser[] = JSON.parse(localStorage.getItem('users') || '[]');
+    if (users.some((u: StoredUser) => u.email === email)) {
+      setError('An account with that email already exists.');
+      return;
+    }
     const hashedPassword = await hashPassword(password);
     users.push({ name, email, password: hashedPassword });
     localStorage.setItem('users', JSON.stringify(users));
@@ -58,6 +61,7 @@ const Signup = () => {
             onChange={setPassword}
             hint="Use at least 8 characters."
           />
+          {error && <p className="text-sm text-red-500 text-center">{error}</p>}
           <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 text-white text-lg font-bold shadow-lg hover:from-purple-600 hover:to-blue-600 transition-all duration-200">Sign Up</button>
         </form>
         <p className="text-center text-sm text-gray-600 mt-8">

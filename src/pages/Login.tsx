@@ -2,14 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import FormField from '../components/FormField';
-
-async function hashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
+import { verifyPassword } from '../utils/crypto';
+import type { StoredUser } from '../types';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -19,10 +13,9 @@ const Login = () => {
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const hashedPassword = await hashPassword(password);
-    const user = users.find((u: any) => u.email === email && u.password === hashedPassword);
-    if (user) {
+    const users: StoredUser[] = JSON.parse(localStorage.getItem('users') || '[]');
+    const user = users.find((u: StoredUser) => u.email === email);
+    if (user && await verifyPassword(password, user.password)) {
       navigate('/dashboard');
     } else {
       setError('Invalid email or password.');

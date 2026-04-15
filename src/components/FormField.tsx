@@ -1,7 +1,9 @@
+import React from 'react';
+
 interface FormFieldProps {
   id: string;
   label: string;
-  type: string;
+  type: React.HTMLInputTypeAttribute;
   placeholder: string;
   value: string;
   onChange: (value: string) => void;

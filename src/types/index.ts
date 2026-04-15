@@ -5,6 +5,11 @@ export interface User {
   email: string;
 }
 
+/** Shape of a user record as it is persisted in localStorage. */
+export interface StoredUser extends User {
+  password: string; // "<saltHex>:<pbkdf2HashHex>" produced by hashPassword()
+}
+
 export interface ReviewEntry {
   id: number;
   timestamp: string;

@@ -5,6 +5,9 @@ import reviewCsv from '../../review-logs/reviews.csv?raw';
 import type { ReviewEntry, ParsedIssue, DevStat, ChipColor, ActivityLogProps } from '../types';
 
 // Lazy-loaded detail files — NOT bundled eagerly (fix #4: no bundle bloat)
+// NOTE: This path is relative to the location of this file (src/pages/ReviewDashboard.tsx).
+// If this component is ever moved, update the path accordingly, or introduce a
+// Vite resolve.alias (e.g. @review-logs → <root>/review-logs) to decouple them.
 const detailFiles = import.meta.glob('../../review-logs/details/*.txt', {
   query: '?raw',
   import: 'default',
@@ -42,6 +45,11 @@ const filterInputCls = 'border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────
 
+// NOTE: RFC 4180 allows a literal " inside a quoted field to be escaped as "".
+// This parser does not handle that case — it toggles inQuotes on every " character,
+// so a field like "say ""hello""" would be parsed incorrectly. Acceptable for the
+// current data set (no fields contain embedded quotes), but worth fixing if the
+// CSV source ever changes.
 function parseCSVLine(line: string): string[] {
   const fields: string[] = [];
   let current = '';

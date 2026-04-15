@@ -281,16 +281,33 @@ PROMPT_EOF
     fi
 
     CHANGED_BY_CLAUDE=$(git diff --name-only)
-    if [ -z "$CHANGED_BY_CLAUDE" ]; then
-      echo -e "  ${YELLOW}⚠️  Claude ran but made no file changes.${NC}"
-    else
-      echo -e "  ${GREEN}✅ All issues have been fixed.${NC}"
-    fi
-
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Review the changes, then commit and push:"
-    echo "    git add -A && git commit -m 'fix: ...' && git push"
+    if [ -z "$CHANGED_BY_CLAUDE" ]; then
+      echo -e "  ${YELLOW}⚠️  Claude ran but made no file changes.${NC}"
+      echo ""
+      echo "  Nothing was modified. You can push as-is:"
+      echo "    git push"
+    else
+      echo -e "  ${GREEN}✅ Claude has fixed the issues in your code.${NC}"
+      echo ""
+      echo "  Modified files:"
+      echo "$CHANGED_BY_CLAUDE" | while read -r f; do echo "    • $f"; done
+      echo ""
+      echo "  ──────────────────────────────────────────────"
+      echo "  ⚠️  The push was intentionally blocked so you"
+      echo "  can review the fixes before they go out."
+      echo "  ──────────────────────────────────────────────"
+      echo ""
+      echo "  Next steps:"
+      echo "    1.  Review the changes in your editor"
+      echo "    2.  git add -A"
+      echo "    3.  git commit -m 'fix: apply Claude review fixes'"
+      echo "    4.  git push"
+      echo ""
+      echo "  The 'error: failed to push' below is expected —"
+      echo "  it just means the original push was held back."
+    fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"AUTO_FIXED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
     exit 1
