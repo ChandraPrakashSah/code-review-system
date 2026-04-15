@@ -1,11 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Card, Table, TableHeader, TableBody, TableRow, TableCell, TableColumn } from '@heroui/react';
 import { useNavigate } from 'react-router-dom';
-
-interface User {
-  name: string;
-  email: string;
-}
+import type { User } from '../types';
 
 const Dashboard = () => {
   const [users, setUsers] = useState<User[]>([]);
