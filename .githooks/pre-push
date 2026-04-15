@@ -68,6 +68,11 @@ GIT_EMAIL=$(git config user.email 2>/dev/null)
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
+# Track temp files for cleanup — trap registered once before the loop (issue #3)
+TEMP_FILES=()
+cleanup_temps() { rm -f "${TEMP_FILES[@]}"; }
+trap 'cleanup_temps' EXIT
+
 # Warn if git identity is not configured and fall back to system username
 if [ -z "$GIT_USER" ]; then
   GIT_USER=$(whoami)
@@ -151,7 +156,7 @@ $DIFF"
 
   # ── Run Claude in background with live spinner ──────────────────────────────
   REVIEW_TEMP=$(mktemp /tmp/claude-review-XXXXXX) || { echo "❌ Failed to create temp file. Aborting."; exit 1; }
-  trap 'rm -f "$REVIEW_TEMP"' EXIT
+  TEMP_FILES+=("$REVIEW_TEMP")
 
   claude -p "$PROMPT" > "$REVIEW_TEMP" 2>&1 &
   CLAUDE_PID=$!
@@ -194,7 +199,7 @@ $DIFF"
   fi
 
   # ── Save review detail file ───────────────────────────────────────────────────
-  DETAIL_NAME="${TIMESTAMP// /_}_${GIT_USER//[^a-zA-Z0-9._-]/_}.txt"
+  DETAIL_NAME="${TIMESTAMP//[: ]/_}_${GIT_USER//[^a-zA-Z0-9._-]/_}.txt"
   DETAIL_PATH="$DETAILS_DIR/$DETAIL_NAME"
   {
     echo "Timestamp : $TIMESTAMP"
@@ -223,43 +228,75 @@ $DIFF"
   echo ""
 
   if [[ "$PROCEED" == "f" || "$PROCEED" == "F" ]]; then
+    FIX_PROMPT_FILE="$REPO_ROOT/.claude-fix.md"
+
+    cat > "$FIX_PROMPT_FILE" << 'PROMPT_EOF'
+Fix ALL of the following code review issues directly in the project files.
+Edit the files to resolve every issue listed below.
+After fixing, confirm what was changed.
+
+PROMPT_EOF
+    echo "$REVIEW_OUTPUT" >> "$FIX_PROMPT_FILE"
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  🔧 Claude is fixing issues — watch the output below"
-    echo "  Files being edited will appear as Claude works..."
+    echo "  🔧 Auto-fixing issues with Claude..."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
-    FIX_PROMPT="The following code review issues were found. Fix ALL of them directly in the project files:
+    FIX_TEMP=$(mktemp /tmp/claude-fix-XXXXXX) || { echo "❌ Failed to create temp file. Aborting."; exit 1; }
+    TEMP_FILES+=("$FIX_TEMP")
 
-$REVIEW_OUTPUT"
+    cd "$REPO_ROOT"
+    claude -p "$(cat "$FIX_PROMPT_FILE")" --allowedTools "Edit,Write,Read,Bash" > "$FIX_TEMP" 2>&1 &
+    FIX_PID=$!
 
-    claude --allowedTools "Edit" "$FIX_PROMPT"
+    ELAPSED=0
+    FIX_TIMEOUT=300
+    while kill -0 "$FIX_PID" 2>/dev/null; do
+      CHAR="${SPINNER:$((ELAPSED % ${#SPINNER})):1}"
+      printf "\r  %s  Claude is fixing issues, please wait..." "$CHAR"
+      sleep 1
+      ELAPSED=$((ELAPSED + 1))
+      if [ $ELAPSED -ge $FIX_TIMEOUT ]; then
+        kill "$FIX_PID" 2>/dev/null
+        printf "\r\033[K"
+        echo "⚠️  Auto-fix timed out after ${FIX_TIMEOUT}s."
+        echo "   Fix manually using the prompt saved in: .claude-fix.md"
+        echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"FIX_FAILED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
+        exit 1
+      fi
+    done
+
+    wait "$FIX_PID"
     FIX_EXIT=$?
+    printf "\r\033[K"
 
     if [ $FIX_EXIT -ne 0 ]; then
-      echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "  ⚠️  Claude fix failed (exit $FIX_EXIT). Please fix manually."
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "  ⚠️  Claude exited with error (exit $FIX_EXIT)."
+      echo "   Fix manually using the prompt saved in: .claude-fix.md"
       echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"FIX_FAILED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
       exit 1
     fi
 
+    echo -e "  ${GREEN}✅ Claude finished fixing.${NC}"
+    echo ""
+    cat "$FIX_TEMP"
+    echo ""
+
+    # Stage all changes and commit the fixes
+    git add -A
+    if git diff --cached --quiet; then
+      echo "  ℹ️  No file changes were made by Claude."
+    else
+      git commit -m "auto-fix: Claude AI applied code review fixes"
+      echo ""
+      echo -e "  ${GREEN}✅ Fixes committed.${NC}"
+    fi
+
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  ${GREEN}✅ Claude finished fixing${NC}"
-    echo ""
-    echo "  Files changed:"
-    git diff --name-only | sed 's/^/    ✏️  /'
-    echo ""
-    echo "  Committing fixes..."
-    git add -A
-    git commit -m "fix: apply Claude AI review suggestions"
-    COMMIT_SHA=$(git rev-parse --short HEAD)
-    echo ""
-    echo "  ✅ Fix commit created: $COMMIT_SHA"
-    echo "  Run 'git push' again to push with the fixes."
+    echo "  Run  git push  again to push with the fixes included."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"AUTO_FIXED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
     exit 1
