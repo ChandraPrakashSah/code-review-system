@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card, CardBody, Button, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell } from '@heroui/react';
-import { useNavigate } from 'react-router-dom';
+import { Card, CardBody, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell } from '@heroui/react';
+import moment from 'moment';
 import reviewCsv from '../../review-logs/reviews.csv?raw';
 import type { ReviewEntry, ParsedIssue, DevStat, ChipColor, ActivityLogProps } from '../types';
+
+const fmtDate = (raw: string) => moment(raw, 'YYYY-MM-DD HH:mm:ss').format('MMM D, YYYY · h:mm A');
 
 // Lazy-loaded detail files — NOT bundled eagerly (fix #4: no bundle bloat)
 // NOTE: This path is relative to the location of this file (src/pages/ReviewDashboard.tsx).
@@ -127,14 +129,20 @@ const StatusBadge = ({ status }: { status: string }) => {
   return <Chip color={cfg.color} size="sm" variant="flat">{cfg.label}</Chip>;
 };
 
-const StatCard = ({ label, value, sub, color }: { label: string; value: number; sub?: string; color: string }) => (
-  <Card shadow="sm" className="flex-1 min-w-[110px]">
-    <CardBody className="text-center py-5 px-3">
-      <p className={`text-3xl font-bold ${color}`}>{value}</p>
-      <p className="text-sm font-medium text-gray-600 mt-1">{label}</p>
+const StatCard = ({ label, value, sub, icon, accent, textColor }: {
+  label: string; value: number; sub?: string; icon: string; accent: string; textColor: string;
+}) => (
+  <div className="flex-1 min-w-[150px] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div className={`h-1 w-full ${accent}`} />
+    <div className="px-5 py-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-2xl">{icon}</span>
+        <span className={`text-3xl font-extrabold tracking-tight ${textColor}`}>{value}</span>
+      </div>
+      <p className="text-sm font-semibold text-gray-700 leading-tight">{label}</p>
       {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
-    </CardBody>
-  </Card>
+    </div>
+  </div>
 );
 
 // Lazy-loading detail panel (fix #4)
@@ -206,13 +214,13 @@ const ReviewDetail = ({ detailFile }: { detailFile: string }) => {
 const StatsBar = ({ total, pushed, aborted, failed, notInstalled, uniqueDevs }: {
   total: number; pushed: number; aborted: number; failed: number; notInstalled: number; uniqueDevs: number;
 }) => (
-  <div className="flex gap-3 flex-wrap">
-    <StatCard label="Total Events"  value={total}        color="text-gray-800" />
-    <StatCard label="Pushed"        value={pushed}       color="text-green-600"  sub="reviewed & pushed" />
-    <StatCard label="Aborted"       value={aborted}      color="text-amber-500"  sub="held back" />
-    <StatCard label="Failed"        value={failed}       color="text-red-500"    sub="review error" />
-    <StatCard label="Not Installed" value={notInstalled} color="text-gray-400"   sub="claude CLI missing" />
-    <StatCard label="Developers"    value={uniqueDevs}   color="text-blue-600" />
+  <div className="flex gap-4 flex-wrap">
+    <StatCard label="Total Events"  value={total}        icon="📊" accent="bg-gray-400"   textColor="text-gray-800" />
+    <StatCard label="Pushed"        value={pushed}       icon="✅" accent="bg-green-500"  textColor="text-green-600"  sub="reviewed & pushed" />
+    <StatCard label="Aborted"       value={aborted}      icon="⏸️" accent="bg-amber-400"  textColor="text-amber-500"  sub="held back" />
+    <StatCard label="Failed"        value={failed}       icon="❌" accent="bg-red-500"    textColor="text-red-500"    sub="review error" />
+    <StatCard label="Not Installed" value={notInstalled} icon="⚙️" accent="bg-gray-300"   textColor="text-gray-400"   sub="claude CLI missing" />
+    <StatCard label="Developers"    value={uniqueDevs}   icon="👥" accent="bg-blue-500"   textColor="text-blue-600" />
   </div>
 );
 
@@ -241,7 +249,7 @@ const DevComplianceTable = ({ devStats }: { devStats: DevStat[] }) => (
               <TableCell><span className="font-semibold text-green-600">{d.pushed}</span></TableCell>
               <TableCell><span className="text-amber-500">{d.aborted}</span></TableCell>
               <TableCell><span className="text-red-500">{d.failed}</span></TableCell>
-              <TableCell><span className="text-xs text-gray-400">{d.lastActivity}</span></TableCell>
+              <TableCell><span className="text-xs text-gray-400">{fmtDate(d.lastActivity)}</span></TableCell>
               <TableCell>{devBadge(d)}</TableCell>
             </TableRow>
           ))}
@@ -292,7 +300,7 @@ const ActivityLog = ({ filtered, total, search, onSearchChange, statusFilter, on
         {filtered.map(entry => (
           <div key={entry.id} className="border-b border-gray-100 last:border-b-0">
             <div className={`grid grid-cols-[180px_140px_100px_1fr_120px_40px] px-4 py-3 items-center hover:bg-gray-50 transition-colors ${expandedRow === entry.id ? 'bg-blue-50' : ''}`}>
-              <span className="text-xs text-gray-400">{entry.timestamp}</span>
+              <span className="text-xs text-gray-400">{fmtDate(entry.timestamp)}</span>
               <span className="font-medium text-sm text-gray-800">{entry.username}</span>
               <span className="text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 w-fit">{entry.branch || '—'}</span>
               <span className="text-xs text-gray-500 truncate pr-2" title={entry.files}>{entry.files || '—'}</span>
@@ -329,7 +337,6 @@ const ActivityLog = ({ filtered, total, search, onSearchChange, statusFilter, on
 // ── Main component ────────────────────────────────────────────────────────────
 
 const ReviewDashboard = () => {
-  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
@@ -387,11 +394,7 @@ const ReviewDashboard = () => {
           <h1 className="text-xl font-bold text-gray-800">🤖 Code Review Dashboard</h1>
           <p className="text-xs text-gray-400 mt-0.5">Claude AI review compliance — team overview</p>
         </div>
-        <div className="flex gap-2 items-center">
-          {/* fix #10 — clarify this is build-time data, not a live reload */}
-          <span className="text-xs text-gray-400 mr-1">Data refreshes on rebuild</span>
-          <Button size="sm" variant="flat" onPress={() => navigate('/dashboard')}>← Back</Button>
-        </div>
+        <span className="text-xs text-gray-400">Data refreshes on rebuild</span>
       </div>
 
       <div className="p-6 space-y-6">

@@ -16,7 +16,7 @@ const Login = () => {
     const users: StoredUser[] = JSON.parse(localStorage.getItem('users') || '[]');
     const user = users.find((u: StoredUser) => u.email === email);
     if (user && await verifyPassword(password, user.password)) {
-      navigate('/dashboard');
+      navigate('/reviews');
     } else {
       setError('Invalid email or password.');
     }
