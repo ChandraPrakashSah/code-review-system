@@ -280,24 +280,17 @@ PROMPT_EOF
       exit 1
     fi
 
-    echo -e "  ${GREEN}✅ Claude finished fixing.${NC}"
-    echo ""
-    cat "$FIX_TEMP"
-    echo ""
-
-    # Stage only files that were modified by Claude (avoids staging .env, secrets, artifacts)
-    git add -- $(git diff --name-only)
-    if git diff --cached --quiet; then
-      echo "  ℹ️  No file changes were made by Claude."
+    CHANGED_BY_CLAUDE=$(git diff --name-only)
+    if [ -z "$CHANGED_BY_CLAUDE" ]; then
+      echo -e "  ${YELLOW}⚠️  Claude ran but made no file changes.${NC}"
     else
-      git commit -m "auto-fix: Claude AI applied code review fixes"
-      echo ""
-      echo -e "  ${GREEN}✅ Fixes committed.${NC}"
+      echo -e "  ${GREEN}✅ All issues have been fixed.${NC}"
     fi
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Run  git push  again to push with the fixes included."
+    echo "  Review the changes, then commit and push:"
+    echo "    git add -A && git commit -m 'fix: ...' && git push"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "\"$TIMESTAMP\",\"$GIT_USER\",\"$GIT_EMAIL\",\"$BRANCH\",\"$CHANGED_FILES\",\"AUTO_FIXED\",\"$DETAIL_NAME\"" >> "$LOG_FILE"
     exit 1
