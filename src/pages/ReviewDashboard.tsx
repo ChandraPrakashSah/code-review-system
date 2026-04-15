@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardBody, Button, Chip, Table, TableHeader, TableColumn, TableBody, TableRow, TableCell } from '@heroui/react';
 import { useNavigate } from 'react-router-dom';
 import reviewCsv from '../../review-logs/reviews.csv?raw';
-import type { ReviewEntry, ParsedIssue, DevStat, ChipColor } from '../types';
+import type { ReviewEntry, ParsedIssue, DevStat, ChipColor, ActivityLogProps } from '../types';
 
 // Lazy-loaded detail files — NOT bundled eagerly (fix #4: no bundle bloat)
 const detailFiles = import.meta.glob('../../review-logs/details/*.txt', {
@@ -65,8 +65,19 @@ function parseCSV(raw: string): ReviewEntry[] {
   }, []).reverse();
 }
 
+const KNOWN_EXTENSIONS = new Set([
+  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
+  'css', 'scss', 'html', 'json', 'md', 'txt',
+  'svg', 'png', 'jpg', 'jpeg', 'gif', 'ico',
+  'sh', 'bash', 'env', 'yml', 'yaml', 'toml', 'lock',
+]);
+
 function extractFilesFromLine(text: string): string[] {
-  return [...new Set(text.match(/[\w./\\-]+\.\w{2,4}(?::\d+(?:-\d+)?)?/g) ?? [])];
+  const matches = text.match(/[\w./\\-]+\.\w{2,4}(?::\d+(?:-\d+)?)?/g) ?? [];
+  return [...new Set(matches.filter(m => {
+    const ext = m.replace(/:\d.*$/, '').split('.').pop() ?? '';
+    return KNOWN_EXTENSIONS.has(ext);
+  }))];
 }
 
 function parseReviewDetail(content: string): ParsedIssue[] {
@@ -122,19 +133,20 @@ const StatCard = ({ label, value, sub, color }: { label: string; value: number; 
 const ReviewDetail = ({ detailFile }: { detailFile: string }) => {
   const [raw, setRaw] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const mounted = useRef(true);
 
   useEffect(() => {
-    mounted.current = true;
+    // Local flag avoids the Strict Mode double-invoke race where mounted.current
+    // could be reset between the first cleanup and the second invocation.
+    let active = true;
     setLoading(true);
     setRaw(null);
     if (!detailFile) { setLoading(false); return; }
     const key = Object.keys(detailFiles).find(k => k.endsWith(detailFile));
     if (!key) { setLoading(false); return; }
     (detailFiles[key] as () => Promise<string>)()
-      .then(content => { if (mounted.current) { setRaw(content); setLoading(false); } })
-      .catch(() => { if (mounted.current) setLoading(false); });
-    return () => { mounted.current = false; };
+      .then(content => { if (active) { setRaw(content); setLoading(false); } })
+      .catch(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [detailFile]);
 
   if (loading) return <div className="px-4 py-3 text-sm text-gray-400 animate-pulse">Loading review...</div>;
@@ -232,13 +244,7 @@ const DevComplianceTable = ({ devStats }: { devStats: DevStat[] }) => (
 );
 
 // Extracted sub-component (fix #15)
-const ActivityLog = ({ filtered, total, search, setSearch, statusFilter, setStatusFilter, allStatuses, expandedRow, toggleRow }: {
-  filtered: ReviewEntry[]; total: number;
-  search: string; setSearch: (v: string) => void;
-  statusFilter: string; setStatusFilter: (v: string) => void;
-  allStatuses: string[];
-  expandedRow: number | null; toggleRow: (id: number) => void;
-}) => (
+const ActivityLog = ({ filtered, total, search, onSearchChange, statusFilter, onStatusChange, allStatuses, expandedRow, toggleRow }: ActivityLogProps) => (
   <Card shadow="sm">
     <CardBody>
       <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
@@ -249,12 +255,12 @@ const ActivityLog = ({ filtered, total, search, setSearch, statusFilter, setStat
             type="text"
             placeholder="Search developer, branch, files..."
             value={search}
-            onChange={e => { setSearch(e.target.value); }}  // fix #9 handled in parent
+            onChange={e => { onSearchChange(e.target.value); }}
             className={`${filterInputCls} w-60`}
           />
           <select
             value={statusFilter}
-            onChange={e => { setStatusFilter(e.target.value); }}  // fix #9 handled in parent
+            onChange={e => { onStatusChange(e.target.value); }}
             className={filterInputCls}
           >
             <option value="ALL">All Statuses</option>
@@ -334,6 +340,9 @@ const ReviewDashboard = () => {
 
   const devStats = useMemo<DevStat[]>(() => {
     const map = new Map<string, DevStat>();
+    // entries is newest-first (reversed in parseCSV); reverse again to oldest-first
+    // so each loop iteration overwrites lastActivity with progressively newer timestamps,
+    // leaving the most recent timestamp as the final value.
     [...entries].reverse().forEach(e => {
       if (!map.has(e.username)) {
         map.set(e.username, { username: e.username, email: e.email, total: 0, pushed: 0, aborted: 0, failed: 0, notInstalled: 0, lastActivity: e.timestamp });
@@ -384,9 +393,9 @@ const ReviewDashboard = () => {
           filtered={filtered}
           total={stats.total}
           search={search}
-          setSearch={handleSearchChange}
+          onSearchChange={handleSearchChange}
           statusFilter={statusFilter}
-          setStatusFilter={handleStatusChange}
+          onStatusChange={handleStatusChange}
           allStatuses={allStatuses}
           expandedRow={expandedRow}
           toggleRow={toggleRow}

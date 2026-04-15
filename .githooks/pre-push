@@ -237,6 +237,7 @@ After fixing, confirm what was changed.
 
 PROMPT_EOF
     echo "$REVIEW_OUTPUT" >> "$FIX_PROMPT_FILE"
+    TEMP_FILES+=("$FIX_PROMPT_FILE")
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -248,10 +249,7 @@ PROMPT_EOF
     TEMP_FILES+=("$FIX_TEMP")
 
     cd "$REPO_ROOT"
-    # Pipe prompt via stdin to avoid ARG_MAX limits with large diffs.
-    # Redirect stdin from the file (overrides exec < /dev/tty for this process)
-    # so claude never waits on terminal input while running in the background.
-    claude --print --allowedTools "Edit,Write,Read,Bash" < "$FIX_PROMPT_FILE" > "$FIX_TEMP" 2>&1 &
+    claude -p "$(cat "$FIX_PROMPT_FILE")" --allowedTools Edit,Write,Read,Bash > "$FIX_TEMP" 2>&1 &
     FIX_PID=$!
 
     ELAPSED=0
@@ -287,8 +285,8 @@ PROMPT_EOF
     cat "$FIX_TEMP"
     echo ""
 
-    # Stage all changes and commit the fixes
-    git add -A
+    # Stage only files that were modified by Claude (avoids staging .env, secrets, artifacts)
+    git add -- $(git diff --name-only)
     if git diff --cached --quiet; then
       echo "  ℹ️  No file changes were made by Claude."
     else

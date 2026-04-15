@@ -1,6 +1,14 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import FormField from '../components/FormField';
+
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 const Signup = () => {
   const [name, setName] = useState('');
@@ -8,10 +16,11 @@ const Signup = () => {
   const [password, setPassword] = useState('');
   const navigate = useNavigate();
 
-  const handleSignup = (e: FormEvent) => {
+  const handleSignup = async (e: FormEvent) => {
     e.preventDefault();
     const users = JSON.parse(localStorage.getItem('users') || '[]');
-    users.push({ name, email, password });
+    const hashedPassword = await hashPassword(password);
+    users.push({ name, email, password: hashedPassword });
     localStorage.setItem('users', JSON.stringify(users));
     navigate('/');
   };
@@ -52,7 +61,7 @@ const Signup = () => {
           <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 text-white text-lg font-bold shadow-lg hover:from-purple-600 hover:to-blue-600 transition-all duration-200">Sign Up</button>
         </form>
         <p className="text-center text-sm text-gray-600 mt-8">
-          Already have an account? <a href="/" className="text-blue-600 font-medium hover:underline">Login</a>
+          Already have an account? <Link to="/" className="text-blue-600 font-medium hover:underline">Login</Link>
         </p>
       </div>
     </div>

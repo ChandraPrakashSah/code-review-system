@@ -34,3 +34,15 @@ export interface DevStat {
 }
 
 export type ChipColor = 'success' | 'warning' | 'danger' | 'default' | 'primary';
+
+export interface ActivityLogProps {
+  filtered: ReviewEntry[];
+  total: number;
+  search: string;
+  onSearchChange: (v: string) => void;
+  statusFilter: string;
+  onStatusChange: (v: string) => void;
+  allStatuses: string[];
+  expandedRow: number | null;
+  toggleRow: (id: number) => void;
+}

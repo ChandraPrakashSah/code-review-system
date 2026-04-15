@@ -1,22 +1,31 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import FormField from '../components/FormField';
+
+async function hashPassword(password: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const navigate = useNavigate();
 
-  const handleLogin = (e: FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     const users = JSON.parse(localStorage.getItem('users') || '[]');
-    const user = users.find((u: any) => u.email === email && u.password === password);
+    const hashedPassword = await hashPassword(password);
+    const user = users.find((u: any) => u.email === email && u.password === hashedPassword);
     if (user) {
       navigate('/dashboard');
     } else {
-      console.error('Invalid credentials');
-      console.log('Login failed for email:', email);
+      setError('Invalid email or password.');
     }
   };
 
@@ -59,10 +68,11 @@ const Login = () => {
             onChange={setPassword}
             hint="Use at least 8 characters."
           />
+          {error && <p className="text-sm text-red-500 text-center">{error}</p>}
           <button type="submit" className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-500 text-white text-lg font-bold shadow-lg hover:from-blue-600 hover:to-purple-600 transition-all duration-200">Login</button>
         </form>
         <p className="text-center text-sm text-gray-600 mt-8">
-          Don't have an account? <a href="/signup" className="text-purple-600 font-medium hover:underline">Sign up</a>
+          Don't have an account? <Link to="/signup" className="text-purple-600 font-medium hover:underline">Sign up</Link>
         </p>
       </div>
     </div>
